@@ -9,9 +9,15 @@
 #include <string>
 #include <thread>
 
+namespace spdlog {
+class logger;
+}
+
 namespace Afina {
 namespace Concurrency {
 
+class Executor;
+void perform(Executor *executor);
 /**
  * # Thread pool
  */
@@ -28,9 +34,11 @@ class Executor {
         kStopped
     };
 
-    Executor(std::string name, int size);
+public:
+    Executor(int low_watermark, int hight_watermark, int max_queue_size, int idle_time);
     ~Executor();
 
+    void Start(std::shared_ptr<spdlog::logger> logger);
     /**
      * Signal thread pool to stop, it will stop accepting new jobs and close threads just after each become
      * free. All enqueued jobs will be complete.
@@ -51,16 +59,22 @@ class Executor {
         auto exec = std::bind(std::forward<F>(func), std::forward<Types>(args)...);
 
         std::unique_lock<std::mutex> lock(this->mutex);
-        if (state != State::kRun) {
+        if ((tasks.size() >= max_queue_size) || (state != State::kRun)) {
             return false;
         }
-
         // Enqueue new task
         tasks.push_back(exec);
+        if ((threads.size() - num_of_workers == 0) && threads.size() < hight_watermark) {
+            threads.emplace_back(&perform, this);
+        }
         empty_condition.notify_one();
         return true;
     }
 
+    /**
+     * Flag to stop bg threads
+     */
+    State state;
 private:
     // No copy/move/assign allowed
     Executor(const Executor &);            // = delete;
@@ -72,7 +86,7 @@ private:
      * Main function that all pool threads are running. It polls internal task queue and execute tasks
      */
     friend void perform(Executor *executor);
-
+    void kill_thread();
     /**
      * Mutex to protect state below from concurrent modification
      */
@@ -82,21 +96,23 @@ private:
      * Conditional variable to await new data in case of empty queue
      */
     std::condition_variable empty_condition;
+    std::condition_variable server_stop_condition;
 
     /**
      * Vector of actual threads that perorm execution
      */
-    std::vector<std::thread> threads;
-
+     std::vector<std::thread> threads;
     /**
      * Task queue
      */
     std::deque<std::function<void()>> tasks;
 
-    /**
-     * Flag to stop bg threads
-     */
-    State state;
+     std::shared_ptr<spdlog::logger> _logger;
+    int low_watermark;
+    int hight_watermark;
+    int max_queue_size;
+    int idle_time;
+    int num_of_workers;
 };
 
 } // namespace Concurrency

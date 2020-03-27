@@ -1,3 +1,4 @@
+
 #include "ServerImpl.h"
 
 #include <cassert>
@@ -28,8 +29,9 @@ namespace Network {
 namespace MTblocking {
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {}
-
+ ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl)
+    : Server(ps, pl), _executor{1, 5, 7, 1500} {}
+//ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl) : Server(ps, pl) {}
 // See Server.h
 ServerImpl::~ServerImpl() {}
 
@@ -37,9 +39,11 @@ ServerImpl::~ServerImpl() {}
 void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers = 1) {
     _logger = pLogging->select("network");
     _logger->info("Start mt_blocking network service");
+    _executor.Start(_logger);
 
     max_num_of_workers = n_workers;
     num_of_workers.store(0);
+
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
     sigaddset(&sig_mask, SIGPIPE);
@@ -91,12 +95,13 @@ void ServerImpl::Stop() {
 void ServerImpl::Join() {
     assert(_thread.joinable());
     _thread.join();
+    _executor.Stop(true);
     close(_server_socket);
 
-    std::unique_lock<std::mutex> _lock(clients_queue_lock);
+    /*std::unique_lock<std::mutex> _lock(clients_queue_lock);
     while (num_of_workers > 0) {
         kill_server.wait(_lock);
-    }
+    }*/
 }
 
 // See Server.h
@@ -133,7 +138,7 @@ void ServerImpl::OnRun() {
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
 
-        if (num_of_workers < max_num_of_workers) {
+        /*if (num_of_workers < max_num_of_workers) {
             clients_queue_lock.lock();
             clients_queue.insert(client_socket);
             clients_queue_lock.unlock();
@@ -143,6 +148,9 @@ void ServerImpl::OnRun() {
             num_of_workers++;
         } else {
             _logger->debug("close client");
+            close(client_socket);
+        }*/
+        if (!(_executor.Execute(&ServerImpl::WorkerRun, this, client_socket))) {
             close(client_socket);
         }
     }
@@ -229,14 +237,13 @@ void ServerImpl::WorkerRun(int client_socket) {
                 }
             } // while (readed_bytes)
         }
-
         if (readed_bytes == 0) {
             _logger->debug("Connection closed");
         } else {
             throw std::runtime_error(std::string(strerror(errno)));
         }
     } catch (std::runtime_error &ex) {
-        std::string msg = std::string("SERVER ERROR: ") + ex.what();
+        std::string msg = std::string("SERVER ERROR: ") + ex.what() + "\r\n";
         send(client_socket, msg.data(), msg.size(), 0);
         _logger->error("Failed to process connection on descriptor {}: {}", client_socket, ex.what());
     }
@@ -255,3 +262,4 @@ void ServerImpl::WorkerRun(int client_socket) {
 } // namespace MTblocking
 } // namespace Network
 } // namespace Afina
+

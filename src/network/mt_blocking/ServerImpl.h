@@ -1,11 +1,13 @@
 #ifndef AFINA_NETWORK_MT_BLOCKING_SERVER_H
 #define AFINA_NETWORK_MT_BLOCKING_SERVER_H
 
-#include <afina/network/Server.h>
 #include <atomic>
+#include <thread>
+
+#include <afina/network/Server.h>
 #include <condition_variable>
 #include <set>
-#include <thread>
+#include <afina/concurrency/Executor.h>
 
 namespace spdlog {
 class logger;
@@ -41,6 +43,7 @@ protected:
     void WorkerRun(int client_socket);
 
 private:
+    Afina::Concurrency::Executor _executor;
     // Logger instance
     std::shared_ptr<spdlog::logger> _logger;
 
@@ -57,8 +60,8 @@ private:
     std::thread _thread;
     std::mutex clients_queue_lock;
     std::set<int> clients_queue;
-    size_t max_num_of_workers;
     std::condition_variable kill_server;
+    int max_num_of_workers;
 };
 
 } // namespace MTblocking
