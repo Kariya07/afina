@@ -49,9 +49,7 @@ void SimpleLRU::AddNode(const std::string &key, const std::string &value) {
     _current_size += key.size() + value.size();
 }
 
-void SimpleLRU::Refresh_node(std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>,
-                                      std::less<std::string>>::iterator &it,
-                             const std::string &value) {
+void SimpleLRU::Refresh_node(lru_map::iterator &it, const std::string &value) {
 
     // move the page to tail of queue
     if (it->second.get().next != nullptr) {
@@ -106,6 +104,9 @@ bool SimpleLRU::Set(const std::string &key, const std::string &value) {
     if (it == _lru_index.end()) {
         return false;
     } else {
+        if (value.size() - it->second.get().value.size() > _max_size - _current_size) {
+            return false;
+        }
         Refresh_node(it, value);
     }
     return true;
@@ -156,6 +157,7 @@ bool SimpleLRU::Get(const std::string &key, std::string &value) {
         return false;
     }
     value = it->second.get().value;
+    Refresh_node(it, value);
     return true;
 }
 

@@ -57,6 +57,10 @@ private:
         lru_node *next;
     };
 
+    typedef std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>,
+                     std::less<std::string>>
+        lru_map;
+
     // Maximum number of bytes could be stored in this cache.
     // i.e all (keys+values) must be less the _max_size
     std::size_t _max_size;
@@ -67,13 +71,12 @@ private:
     //
     // List owns all nodes
     // std::unique_ptr<lru_node> _lru_head;//oldest page
-    // std::unique_ptr<lru_node> _lru_tail;//new page
+    //std::unique_ptr<lru_node> _lru_tail;//new page
     lru_node *_lru_head;
     lru_node *_lru_tail;
 
     // Index of nodes from list above, allows fast random access to elements by lru_node#key
-    std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>, std::less<std::string>>
-        _lru_index;
+    lru_map _lru_index;
 
     bool TooBigPage(const std::string &key, const std::string &value);
 
@@ -85,9 +88,7 @@ private:
 
     void AddNode(const std::string &key, const std::string &value);
 
-    void Refresh_node(std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>,
-                               std::less<std::string>>::iterator &it,
-                      const std::string &value);
+    void Refresh_node(lru_map ::iterator &it, const std::string &value);
 };
 
 } // namespace Backend
