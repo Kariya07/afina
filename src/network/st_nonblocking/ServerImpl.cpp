@@ -21,7 +21,6 @@
 #include <afina/Storage.h>
 #include <afina/logging/Service.h>
 
-#include "Connection.h"
 #include "Utils.h"
 
 namespace Afina {
@@ -149,9 +148,11 @@ void ServerImpl::OnRun() {
             } else {
                 // Depends on what connection wants...
                 if (current_event.events & EPOLLIN) {
+                    _logger->debug("begin DoRead");
                     pc->DoRead();
                 }
-                if (current_event.events & EPOLLOUT) {
+                if (pc->_event.events & EPOLLOUT) {
+                    _logger->debug("begin DoWrite");
                     pc->DoWrite();
                 }
             }
@@ -163,6 +164,7 @@ void ServerImpl::OnRun() {
                 }
 
                 close(pc->_socket);
+                clients.erase(pc);
                 pc->OnClose();
 
                 delete pc;
@@ -178,6 +180,11 @@ void ServerImpl::OnRun() {
             }
         }
     }
+    for (auto client: clients){
+        close(client->_socket);
+        delete client;
+    }
+    clients.clear();
     _logger->warn("Acceptor stopped");
 }
 
@@ -207,16 +214,18 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
         }
 
         // Register the new FD to be monitored by epoll.
-        Connection *pc = new(std::nothrow) Connection(infd);
+        Connection *pc = new(std::nothrow) Connection(infd, _logger, pStorage);
         if (pc == nullptr) {
             throw std::runtime_error("Failed to allocate connection");
         }
+        clients.insert(pc);
 
         // Register connection in worker's epoll
         pc->Start();
         if (pc->isAlive()) {
             if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, pc->_socket, &pc->_event)) {
                 pc->OnError();
+                clients.erase(pc);
                 delete pc;
             }
         }
