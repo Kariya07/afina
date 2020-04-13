@@ -39,7 +39,6 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers = 1)
     _logger->info("Start mt_blocking network service");
 
     max_num_of_workers = n_workers;
-    num_of_workers.store(0);
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
     sigaddset(&sig_mask, SIGPIPE);
@@ -82,7 +81,8 @@ void ServerImpl::Start(uint16_t port, uint32_t n_accept, uint32_t n_workers = 1)
 void ServerImpl::Stop() {
     running.store(false);
     shutdown(_server_socket, SHUT_RDWR);
-    for (auto client_id : clients_queue) {
+    std::unique_lock<std::mutex> set_lock(set_of_clients_lock);
+    for (auto client_id : set_of_clients) {
         shutdown(client_id, SHUT_RD);
     }
 }
@@ -93,9 +93,9 @@ void ServerImpl::Join() {
     _thread.join();
     close(_server_socket);
 
-    std::unique_lock<std::mutex> _lock(clients_queue_lock);
-    while (num_of_workers > 0) {
-        kill_server.wait(_lock);
+    std::unique_lock<std::mutex> _lock(set_of_clients_lock);
+    while (!set_of_clients.empty()) {
+        check_num_of_workers.wait(_lock);
     }
 }
 
@@ -133,14 +133,18 @@ void ServerImpl::OnRun() {
             setsockopt(client_socket, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof tv);
         }
 
-        if (num_of_workers < max_num_of_workers) {
-            clients_queue_lock.lock();
-            clients_queue.insert(client_socket);
-            clients_queue_lock.unlock();
+        if (running.load() && (set_of_clients.size() < max_num_of_workers)) {
+            std::unique_lock<std::mutex> set_lock(set_of_clients_lock);
+            if (!running.load()) {
+                _logger->debug("close client");
+                close(client_socket);
+                continue;
+            }
+            set_of_clients.insert(client_socket);
+
             _logger->debug("begin new thread...");
             std::thread thread_for_worker(&ServerImpl::WorkerRun, this, client_socket);
             thread_for_worker.detach();
-            num_of_workers++;
         } else {
             _logger->debug("close client");
             close(client_socket);
@@ -242,13 +246,12 @@ void ServerImpl::WorkerRun(int client_socket) {
     }
 
     // We are done with this connection
+    set_of_clients_lock.lock();
     close(client_socket);
-    clients_queue_lock.lock();
-    clients_queue.erase(client_socket);
-    clients_queue_lock.unlock();
-    num_of_workers--;
-    if (num_of_workers == 0) {
-        kill_server.notify_one();
+    set_of_clients.erase(client_socket);
+    set_of_clients_lock.unlock();
+    if (set_of_clients.empty()) {
+        check_num_of_workers.notify_all();
     }
 }
 

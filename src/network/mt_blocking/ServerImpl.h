@@ -48,17 +48,16 @@ private:
     // flag must be atomic in order to safely publisj changes cross thread
     // bounds
     std::atomic<bool> running;
-    std::atomic<size_t> num_of_workers;
 
     // Server socket to accept connections on
     int _server_socket;
 
     // Thread to run network on
     std::thread _thread;
-    std::mutex clients_queue_lock;
-    std::set<int> clients_queue;
+    std::mutex set_of_clients_lock;
+    std::set<int> set_of_clients;
     size_t max_num_of_workers;
-    std::condition_variable kill_server;
+    std::condition_variable check_num_of_workers;
 };
 
 } // namespace MTblocking
