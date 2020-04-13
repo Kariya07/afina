@@ -116,7 +116,7 @@ bool SimpleLRU::Delete(const std::string &key) {
     _current_size -= key.size() + node_to_delete.value.size();
 
     node_to_delete.next->prev = node_to_delete.prev;
-    node_to_delete.prev->next.swap(node_to_delete.next);
+    swap(node_to_delete.next, node_to_delete.prev->next);
     node_to_delete.next.reset();
     return true;
 }
