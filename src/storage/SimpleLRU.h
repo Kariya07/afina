@@ -18,17 +18,23 @@ namespace Backend {
 class SimpleLRU : public Afina::Storage {
 public:
     SimpleLRU(size_t max_size = 1024) : _max_size(max_size), _current_size(0) {
-        _lru_head = nullptr;
-        _lru_tail = nullptr;
+        // _lru_tail and _lru_head are pointers to empty links
+        // meaningful list items are located between them
+        _lru_tail = new lru_node;
+        _lru_tail->next = nullptr;
+        _lru_head = std::unique_ptr<lru_node>(new lru_node);
+        _lru_head->prev = nullptr;
+        _lru_head->next = std::unique_ptr<lru_node>(_lru_tail);
+        _lru_tail->prev = _lru_head.get();
     }
 
     ~SimpleLRU() {
         _lru_index.clear();
-        while (_lru_head != nullptr) {
-            auto p = _lru_head;
-            _lru_head = p->next;
-            delete p;
+        while (_lru_head.get() != _lru_tail) {
+            _lru_tail = _lru_tail->prev;
+            _lru_tail->next.reset();
         }
+        _lru_head.reset();
     }
 
     // Implements Afina::Storage interface
@@ -51,10 +57,8 @@ private:
     using lru_node = struct lru_node {
         std::string key;
         std::string value;
-        // std::unique_ptr<lru_node> prev;
-        // std::unique_ptr<lru_node> next;
         lru_node *prev;
-        lru_node *next;
+        std::unique_ptr<lru_node> next;
     };
 
     typedef std::map<std::reference_wrapper<const std::string>, std::reference_wrapper<lru_node>,
@@ -70,9 +74,7 @@ private:
     // element that wasn't used for longest time.
     //
     // List owns all nodes
-    // std::unique_ptr<lru_node> _lru_head;//oldest page
-    //std::unique_ptr<lru_node> _lru_tail;//new page
-    lru_node *_lru_head;
+    std::unique_ptr<lru_node> _lru_head;
     lru_node *_lru_tail;
 
     // Index of nodes from list above, allows fast random access to elements by lru_node#key
@@ -84,11 +86,11 @@ private:
 
     bool QueueIsEmpty();
 
-    void Delete_oldest_node();
+    bool Delete_oldest_node();
 
-    void AddNode(const std::string &key, const std::string &value);
+    bool AddNode(const std::string &key, const std::string &value);
 
-    void Refresh_node(lru_map ::iterator &it, const std::string &value);
+    bool Refresh_node(lru_map ::iterator &it, const std::string &value);
 };
 
 } // namespace Backend
