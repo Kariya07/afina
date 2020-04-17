@@ -150,7 +150,7 @@ void Connection::DoWrite() {
         }
         out.erase(out.begin(), out.begin() + i);
         if (out.empty()) {
-            _event.events = EPOLLIN | EPOLLHUP | EPOLLERR | EPOLLET;
+            _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
         }
     } else {
         is_alive.store(false);
