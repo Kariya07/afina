@@ -64,7 +64,7 @@ public:
         }
         // Enqueue new task
         tasks.push_back(exec);
-        if ((threads.size() - num_of_workers == 0) && threads.size() < hight_watermark) {
+        if ((free_threads == 0) && threads.size() < hight_watermark) {
             threads.emplace_back(&perform, this);
         }
         empty_condition.notify_one();
@@ -107,12 +107,12 @@ private:
      */
     std::deque<std::function<void()>> tasks;
 
-     std::shared_ptr<spdlog::logger> _logger;
+    std::shared_ptr<spdlog::logger> _logger;
     int low_watermark;
     int hight_watermark;
     int max_queue_size;
     int idle_time;
-    int num_of_workers;
+    int free_threads;
 };
 
 } // namespace Concurrency

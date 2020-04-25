@@ -1,5 +1,6 @@
 #include <afina/concurrency/Executor.h>
 
+#include <algorithm>
 #include <iostream>
 #include <utility>
 
@@ -12,11 +13,10 @@ Executor::~Executor() {}
 
 void Executor::Start(std::shared_ptr<spdlog::logger> logger) {
     _logger = std::move(logger);
-    mutex.lock();
+    std::unique_lock<std::mutex> lock(mutex);
     state = State::kRun;
-    mutex.unlock();
     size_t iter = 0;
-    num_of_workers = low_watermark;
+    free_threads = 0;
     while (iter < low_watermark) {
         threads.emplace_back(&perform, this);
         iter++;
@@ -39,34 +39,46 @@ void Executor::Stop(bool await) {
 }
 
 void perform(Executor *executor) {
+    bool time_update = true, loop_exit = false;
     std::function<void()> task;
+    auto current_time = std::chrono::system_clock::now();
     while (executor->state == Executor::State::kRun) {
-        auto current_time = std::chrono::system_clock::now();
+        if (time_update) {
+            current_time = std::chrono::system_clock::now();
+        }
         {
             std::unique_lock<std::mutex> _lock(executor->mutex);
             while ((executor->state == Executor::State::kRun) && executor->tasks.empty()) {
-                executor->num_of_workers--;
+                executor->free_threads++;
                 if (executor->empty_condition.wait_until(_lock, current_time +
                                                                     std::chrono::milliseconds(executor->idle_time)) ==
                     std::cv_status::timeout) {
                     if (executor->threads.size() == executor->low_watermark) {
                         executor->empty_condition.wait(_lock);
                     } else {
-                        executor->kill_thread();
-                        return;
+                        loop_exit = true;
+                        break;
                     }
                 }
-                executor->num_of_workers++;
+                executor->free_threads--;
+            }
+            if (loop_exit) {
+                break;
             }
             if (executor->tasks.empty()) {
+                time_update = false;
                 continue;
             }
 
             task = executor->tasks.front();
             executor->tasks.pop_front();
         }
-        executor->num_of_workers++;
-        task();
+        try {
+            task();
+        } catch (std::runtime_error &ex) {
+            std::cout << "Error in task: " << ex.what() << std::endl;
+        }
+        time_update = true;
     }
     std::unique_lock<std::mutex> _lock(executor->mutex);
     executor->kill_thread();
@@ -75,20 +87,22 @@ void perform(Executor *executor) {
         executor->server_stop_condition.notify_all();
     }
 }
-
 void Executor::kill_thread() {
     // find thread with pid
-    const std::thread::id pid = std::this_thread::get_id();
-    bool flag = false;
+    std::thread::id pid = std::this_thread::get_id();
+
     auto it = threads.begin();
-    while ((it != threads.end()) && (!flag)) {
-        flag = (pid == it->get_id());
+    for(; it != threads.end(); ++it){
+        if(it->get_id() == pid){
+            break;
+        }
     }
-    if (flag) {
+    if (it != threads.end()) {
         it->detach();
+        free_threads--;
         threads.erase(it);
     } else {
-        throw std::runtime_error("Out of range in Threads");
+        std::cout << "Failed to delete thread: " << pid << std::endl;
     }
 }
 } // namespace Concurrency
