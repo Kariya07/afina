@@ -151,7 +151,7 @@ void ServerImpl::OnRun() {
                     _logger->debug("begin DoRead");
                     pc->DoRead();
                 }
-                if (pc->_event.events & EPOLLOUT) {
+                if (current_event.events & EPOLLOUT) {
                     _logger->debug("begin DoWrite");
                     pc->DoWrite();
                 }
@@ -180,7 +180,7 @@ void ServerImpl::OnRun() {
             }
         }
     }
-    for (auto client: clients){
+    for (auto client : clients) {
         close(client->_socket);
         delete client;
     }
@@ -214,7 +214,7 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
         }
 
         // Register the new FD to be monitored by epoll.
-        Connection *pc = new(std::nothrow) Connection(infd, _logger, pStorage);
+        Connection *pc = new (std::nothrow) Connection(infd, _logger, pStorage);
         if (pc == nullptr) {
             throw std::runtime_error("Failed to allocate connection");
         }

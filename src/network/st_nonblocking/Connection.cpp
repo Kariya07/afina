@@ -29,19 +29,8 @@ void Connection::OnClose() {
 
 // See Connection.h
 void Connection::DoRead() {
-    // - parser: parse state of the stream
-    // - command_to_execute: last command parsed out of stream
-    // - arg_remains: how many bytes to read from stream to get command argument
-    // - argument_for_command: buffer stores argument
-    std::size_t arg_remains;
-    Protocol::Parser parser;
-    std::string argument_for_command;
-    std::unique_ptr<Execute::Command> command_to_execute;
-
     try {
-        int readed_bytes = 0;
         int read_bytes = -1;
-        char client_buffer[4096];
         while ((read_bytes = read(_socket, client_buffer + readed_bytes, sizeof(client_buffer) - readed_bytes)) > 0) {
             _logger->debug("Got {} bytes from socket", read_bytes);
 
@@ -113,7 +102,7 @@ void Connection::DoRead() {
                 }
             } // while (readed_bytes)
         }
-        is_alive = false;
+        finish_reading = true;
         if (read_bytes == 0) {
             _logger->debug("Connection closed");
         } else {
@@ -121,6 +110,7 @@ void Connection::DoRead() {
         }
     } catch (std::runtime_error &ex) {
         _logger->error("Failed to process connection on descriptor {}: {}", _socket, ex.what());
+        finish_reading = true;
     }
 }
 
@@ -132,6 +122,7 @@ void Connection::DoWrite() {
         iov[i].iov_len = out[i].size();
         if (i == 0) {
             iov[0].iov_base = &out[0][0] + written;
+            iov[0].iov_len -= written;
         }
     }
 
@@ -149,10 +140,13 @@ void Connection::DoWrite() {
         out.erase(out.begin(), out.begin() + i);
         if (out.empty()) {
             _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
+            if (finish_reading) {
+                is_alive = false;
+            }
         }
     } else {
+        _logger->warn("Failed writing on descriptor: {}", _socket);
         is_alive = false;
-        throw std::runtime_error("Error in writev()");
     }
 }
 
