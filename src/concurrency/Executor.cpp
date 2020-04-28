@@ -18,7 +18,8 @@ void Executor::Start(std::shared_ptr<spdlog::logger> logger) {
     size_t iter = 0;
     free_threads = 0;
     while (iter < low_watermark) {
-        threads.emplace_back(&perform, this);
+        std::thread new_thread(&perform, this);
+        new_thread.detach();
         iter++;
     }
 }
@@ -31,6 +32,9 @@ void Executor::Stop(bool await) {
         state = State::kStopping;
         empty_condition.notify_all();
         if (await) {
+            if (low_watermark == 0) {
+                state = State::kStopped;
+            }
             while (state != State::kStopped) {
                 server_stop_condition.wait(lock);
             }
@@ -39,6 +43,7 @@ void Executor::Stop(bool await) {
 }
 
 void perform(Executor *executor) {
+    executor->thread_ids.insert(std::this_thread::get_id());
     bool time_update = true, loop_exit = false;
     std::function<void()> task;
     auto current_time = std::chrono::system_clock::now();
@@ -53,7 +58,7 @@ void perform(Executor *executor) {
                 if (executor->empty_condition.wait_until(_lock, current_time +
                                                                     std::chrono::milliseconds(executor->idle_time)) ==
                     std::cv_status::timeout) {
-                    if (executor->threads.size() == executor->low_watermark) {
+                    if (executor->thread_ids.size() == executor->low_watermark) {
                         executor->empty_condition.wait(_lock);
                     } else {
                         loop_exit = true;
@@ -82,25 +87,18 @@ void perform(Executor *executor) {
     }
     std::unique_lock<std::mutex> _lock(executor->mutex);
     executor->kill_thread();
-    if (executor->threads.empty()) {
+    if (executor->thread_ids.empty()) {
         executor->state = Executor::State::kStopped;
         executor->server_stop_condition.notify_all();
     }
 }
 void Executor::kill_thread() {
     // find thread with pid
-    std::thread::id pid = std::this_thread::get_id();
-
-    auto it = threads.begin();
-    for(; it != threads.end(); ++it){
-        if(it->get_id() == pid){
-            break;
-        }
-    }
-    if (it != threads.end()) {
-        it->detach();
+    const std::thread::id pid = std::this_thread::get_id();
+    auto it = thread_ids.find(pid);
+    if (it != thread_ids.end()) {
         free_threads--;
-        threads.erase(it);
+        thread_ids.erase(it);
     } else {
         std::cout << "Failed to delete thread: " << pid << std::endl;
     }

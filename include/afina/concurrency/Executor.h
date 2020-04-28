@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <string>
 #include <thread>
 
@@ -64,8 +65,9 @@ public:
         }
         // Enqueue new task
         tasks.push_back(exec);
-        if ((free_threads == 0) && threads.size() < hight_watermark) {
-            threads.emplace_back(&perform, this);
+        if ((free_threads == 0) && thread_ids.size() < hight_watermark) {
+            std::thread new_thread(&perform, this);
+            new_thread.detach();
         }
         empty_condition.notify_one();
         return true;
@@ -75,6 +77,7 @@ public:
      * Flag to stop bg threads
      */
     State state;
+
 private:
     // No copy/move/assign allowed
     Executor(const Executor &);            // = delete;
@@ -99,9 +102,9 @@ private:
     std::condition_variable server_stop_condition;
 
     /**
-     * Vector of actual threads that perorm execution
+     * Vector of actual threads ids that perform execution
      */
-     std::vector<std::thread> threads;
+    std::set<std::thread::id> thread_ids;
     /**
      * Task queue
      */
