@@ -2,10 +2,12 @@
 #define AFINA_COROUTINE_ENGINE_H
 
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <map>
-#include <setjmp.h>
 #include <tuple>
+
+#include <setjmp.h>
 
 namespace Afina {
 namespace Coroutine {
@@ -15,7 +17,8 @@ namespace Coroutine {
  * Allows to run coroutine and schedule its execution. Not threadsafe
  */
 class Engine final {
-private:
+public:
+    using unblocker_func = std::function<void()>;
     /**
      * A single coroutine instance which could be scheduled for execution
      * should be allocated on heap
@@ -39,6 +42,7 @@ private:
         struct context *next = nullptr;
     } context;
 
+private:
     /**
      * Where coroutines stack begins
      */
@@ -55,9 +59,19 @@ private:
     context *alive;
 
     /**
+     * List of corountines that sleep and can't be executed
+     */
+    context *blocked;
+
+    /**
      * Context to be returned finally
      */
     context *idle_ctx;
+
+    /**
+     * Call when all coroutines are blocked
+     */
+    unblocker_func _unblocker;
 
 protected:
     /**
@@ -70,13 +84,12 @@ protected:
      */
     void Restore(context &ctx);
 
-    /**
-     * Suspend current coroutine execution and execute given context
-     */
-    // void Enter(context& ctx);
+    static void null_unblocker() {}
 
 public:
-    Engine() : StackBottom(0), cur_routine(nullptr), alive(nullptr) {}
+    explicit Engine(unblocker_func unblocker = null_unblocker)
+        : StackBottom(0), cur_routine(nullptr), alive(nullptr), blocked(nullptr), _unblocker(std::move(unblocker)),
+          idle_ctx(nullptr) {}
     Engine(Engine &&) = delete;
     Engine(const Engine &) = delete;
 
@@ -94,10 +107,25 @@ public:
      * Suspend current routine and transfers control to the given one, resumes its execution from the point
      * when it has been suspended previously.
      *
-     * If routine to pass execution to is not specified runtime will try to transfer execution back to caller
-     * of the current routine, if there is no caller then this method has same semantics as yield
+     * If routine to pass execution to is not specified (nullptr) then method should behaves like yield. In case
+     * if passed routine is the current one method does nothing
      */
     void sched(void *routine);
+
+    /**
+     * Blocks current routine so that is can't be scheduled anymore
+     * If it was a currently running corountine, then do yield to select new one to be run instead.
+     *
+     * If argument is nullptr then block current coroutine
+     */
+    void block(void *coro = nullptr);
+
+    /**
+     * Put coroutine back to list of alive, so that it could be scheduled later
+     */
+    void unblock(void *coro);
+    void all_unblock();
+    context *get_curroutine();
 
     /**
      * Entry point into the engine. Prepare all internal mechanics and starts given function which is
@@ -116,9 +144,13 @@ public:
 
         // Start routine execution
         void *pc = run(main, std::forward<Ta>(args)...);
-        idle_ctx = new context();
 
+        idle_ctx = new context();
         if (setjmp(idle_ctx->Environment) > 0) {
+            if (alive == nullptr) {
+                _unblocker();
+            }
+
             // Here: correct finish of the coroutine section
             yield();
         } else if (pc != nullptr) {
