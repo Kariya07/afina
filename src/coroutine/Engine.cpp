@@ -18,14 +18,12 @@ void Engine::Store(context &ctx) {
     }
 
     uint32_t cur_size = ctx.Hight - ctx.Low;
-    char *new_buf = std::get<0>(ctx.Stack);
     if (std::get<1>(ctx.Stack) < cur_size) {
-        //delete[] std::get<0>(ctx.Stack);
-        delete [] new_buf;
-        new_buf = new char[cur_size];
+        delete[] std::get<0>(ctx.Stack);
+        std::get<0>(ctx.Stack) = new char[cur_size];
         std::get<1>(ctx.Stack) = cur_size;
     }
-    memcpy(new_buf, ctx.Low, cur_size);
+    memcpy(std::get<0>(ctx.Stack), ctx.Low, cur_size);
 }
 
 void Engine::Restore(context &ctx) {
@@ -35,8 +33,7 @@ void Engine::Restore(context &ctx) {
     }
 
     uint32_t cur_size = ctx.Hight - ctx.Low;
-    char *&buf = std::get<0>(ctx.Stack);
-    memcpy(ctx.Low, buf, cur_size);
+    memcpy(ctx.Low, std::get<0>(ctx.Stack), cur_size);
     longjmp(ctx.Environment, 1);
 }
 
@@ -82,6 +79,9 @@ void Engine::block(void *coro) {
     }else{
         coro_to_block = static_cast<context *>(coro);
     }
+    if(coro_to_block->is_block){
+        return;
+    }
     if(coro_to_block == alive){
         alive = alive->next;
     }
@@ -110,10 +110,14 @@ void Engine::block(void *coro) {
         cur_routine = nullptr;
         Restore(*idle_ctx);
     }
+    coro_to_block->is_block = true;
 }
 
 void Engine::unblock(void *coro) {
     context* coro_to_unblock = static_cast<context *>(coro);
+    if(!coro_to_unblock->is_block){
+        return;
+    }
     if(blocked == coro){
         blocked = blocked->next;
     }
@@ -130,6 +134,7 @@ void Engine::unblock(void *coro) {
     if(coro_to_unblock->next != nullptr){
         coro_to_unblock->next->prev = coro_to_unblock;
     }
+    coro_to_unblock ->is_block = false;
 }
 
 void Engine::all_unblock() {

@@ -109,7 +109,7 @@ void ServerImpl::Join() {
 
 // See ServerImpl.h
 void ServerImpl::OnRun() {
-    _logger->info("Start acceptor");
+    _logger->debug("Start acceptor");
 
     _ctx = engine.get_curroutine();
 
@@ -151,9 +151,8 @@ void ServerImpl::OnRun() {
                 continue;
             }
 
-            // That is some connection!
-            Connection *pc = static_cast<Connection *>(current_event.data.ptr);
 
+            Connection *pc = static_cast<Connection *>(current_event.data.ptr);
             auto old_mask = pc->_event.events;
             if ((current_event.events & EPOLLERR) || (current_event.events & EPOLLHUP)) {
                 pc->OnError();
