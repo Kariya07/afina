@@ -30,9 +30,7 @@ namespace STcoroutine {
 
 // See Server.h
 ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl)
-    : Server(ps, pl), engine([this] { this->unblock(); }) {
-    _ctx = nullptr;
-}
+    : Server(ps, pl), _ctx(nullptr), engine([this] { this->unblocker(); }) {}
 
 // See Server.h
 ServerImpl::~ServerImpl() {}
@@ -83,8 +81,9 @@ void ServerImpl::Start(uint16_t port, uint32_t n_acceptors, uint32_t n_workers) 
         throw std::runtime_error("Failed to create epoll file descriptor: " + std::string(strerror(errno)));
     }
 
-    _work_thread = std::thread(
-        [this] { this->engine.start(static_cast<void (*)(ServerImpl *)>([](ServerImpl *s) { s->OnRun(); }), this); });
+    _work_thread = std::thread([this] {
+        this->engine.start(static_cast<void (*)(ServerImpl *)>([](ServerImpl *server) { server->OnRun(); }), this);
+    });
 }
 
 // See Server.h
@@ -111,7 +110,9 @@ void ServerImpl::Join() {
 // See ServerImpl.h
 void ServerImpl::OnRun() {
     _logger->info("Start acceptor");
+
     _ctx = engine.get_curroutine();
+
     int epoll_descr = epoll_create1(0);
     if (epoll_descr == -1) {
         throw std::runtime_error("Failed to create epoll file descriptor: " + std::string(strerror(errno)));
@@ -240,7 +241,7 @@ void ServerImpl::OnNewConnection(int epoll_descr) {
     }
 }
 
-void ServerImpl::unblock() {
+void ServerImpl::unblocker() {
     engine.unblock(_ctx);
     engine.yield();
 }
