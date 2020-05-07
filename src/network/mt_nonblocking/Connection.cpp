@@ -9,7 +9,6 @@ namespace MTnonblock {
 
 // See Connection.h
 void Connection::Start() {
-    std::unique_lock<std::mutex> _lock(block_other_connections);
     _logger->debug("Start connection on {} socket", _socket);
     _event.data.fd = _socket;
     _event.data.ptr = this;
@@ -30,19 +29,8 @@ void Connection::OnClose() {
 
 // See Connection.h
 void Connection::DoRead() {
-    std::unique_lock<std::mutex> _lock(block_other_connections);
-    // - parser: parse state of the stream
-    // - command_to_execute: last command parsed out of stream
-    // - arg_remains: how many bytes to read from stream to get command argument
-    // - argument_for_command: buffer stores argument
-    std::size_t arg_remains;
-    Protocol::Parser parser;
-    std::string argument_for_command;
-    std::unique_ptr<Execute::Command> command_to_execute;
     try {
-        int readed_bytes = 0;
         int read_bytes = -1;
-        char client_buffer[4096];
         while ((read_bytes = read(_socket, client_buffer + readed_bytes, sizeof(client_buffer) - readed_bytes)) > 0) {
             _logger->debug("Got {} bytes from socket", read_bytes);
 
@@ -114,26 +102,31 @@ void Connection::DoRead() {
                 }
             } // while (readed_bytes)
         }
-        is_alive.store(false);
         if (read_bytes == 0) {
             _logger->debug("Connection closed");
+            finish_reading.store(true);
         } else {
             throw std::runtime_error(std::string(strerror(errno)));
         }
     } catch (std::runtime_error &ex) {
         _logger->error("Failed to process connection on descriptor {}: {}", _socket, ex.what());
+        finish_reading.store(true);
     }
 }
 
 // See Connection.h
 void Connection::DoWrite() {
-    std::unique_lock<std::mutex> _lock(block_other_connections);
+    if (!finish_reading.load()) {
+        _logger->warn("Reading didn't finish");
+        return;
+    }
     struct iovec iov[out.size()];
     for (size_t i = 0; i < out.size(); i++) {
         iov[i].iov_base = &out[i][0];
         iov[i].iov_len = out[i].size();
         if (i == 0) {
             iov[0].iov_base = &out[0][0] + written;
+            iov[i].iov_len -= written;
         }
     }
 
@@ -151,10 +144,11 @@ void Connection::DoWrite() {
         out.erase(out.begin(), out.begin() + i);
         if (out.empty()) {
             _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
+            is_alive.store(false);
         }
     } else {
+        _logger->warn("Failed writing on descriptor: {}", _socket);
         is_alive.store(false);
-        throw std::runtime_error("Error in writev()");
     }
 }
 } // namespace MTnonblock

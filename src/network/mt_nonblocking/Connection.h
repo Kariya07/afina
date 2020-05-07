@@ -19,10 +19,12 @@ public:
         std::memset(&_event, 0, sizeof(struct epoll_event));
         _event.data.ptr = this;
         is_alive.store(true);
+        finish_reading.store(false);
         written = 0;
+        readed_bytes = 0;
     }
 
-    inline bool isAlive() const { return is_alive; }
+    inline bool isAlive() const { return is_alive.load(std::memory_order_acquire); }
 
     void Start();
 
@@ -39,13 +41,24 @@ private:
     int _socket;
     struct epoll_event _event;
 
-    std::mutex block_other_connections;
     std::atomic<bool> is_alive;
     std::vector<std::string> out;
     size_t written;
 
     std::shared_ptr<spdlog::logger> _logger;
     std::shared_ptr<Afina::Storage> pStorage;
+
+    // - parser: parse state of the stream
+    // - command_to_execute: last command parsed out of stream
+    // - arg_remains: how many bytes to read from stream to get command argument
+    // - argument_for_command: buffer stores argument
+    std::size_t arg_remains;
+    Protocol::Parser parser;
+    std::string argument_for_command;
+    std::unique_ptr<Execute::Command> command_to_execute;
+    int readed_bytes;
+    char client_buffer[4096];
+    std::atomic<bool> finish_reading;
 };
 
 } // namespace MTnonblock

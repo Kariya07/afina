@@ -119,6 +119,10 @@ void ServerImpl::Stop() {
     if (eventfd_write(_event_fd, 1)) {
         throw std::runtime_error("Failed to wakeup workers");
     }
+    shutdown(_server_socket, SHUT_RDWR);
+    for (auto pc : set_of_connections) {
+        shutdown(pc->_socket, SHUT_RD);
+    }
 }
 
 // See Server.h
@@ -130,6 +134,13 @@ void ServerImpl::Join() {
     for (auto &w : _workers) {
         w.Join();
     }
+    std::unique_lock<std::mutex> _lock(set_of_connections_lock);
+    for (auto pc : set_of_connections) {
+        close(pc->_socket);
+        //delete pc;
+    }
+    set_of_connections.clear();
+    close(_server_socket);
 }
 
 // See ServerImpl.h
@@ -206,7 +217,13 @@ void ServerImpl::OnRun() {
                     if ((epoll_ctl_retval = epoll_ctl(_data_epoll_fd, EPOLL_CTL_ADD, pc->_socket, &pc->_event))) {
                         _logger->debug("epoll_ctl failed during connection register in workers'epoll: error {}", epoll_ctl_retval);
                         pc->OnError();
+                        std::unique_lock<std::mutex> _lock(set_of_connections_lock);
+                        set_of_connections.erase(pc);
+                        close(pc->_socket);
                         delete pc;
+                    }else{
+                        std::unique_lock<std::mutex> _lock(set_of_connections_lock);
+                        set_of_connections.insert(pc);
                     }
                 }
             }
