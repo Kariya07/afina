@@ -120,8 +120,8 @@ void ServerImpl::Stop() {
         throw std::runtime_error("Failed to wakeup workers");
     }
     shutdown(_server_socket, SHUT_RDWR);
-    for (auto pc : set_of_connections) {
-        shutdown(pc->_socket, SHUT_RD);
+    for (auto client : set_of_clients) {
+        shutdown(client, SHUT_RD);
     }
 }
 
@@ -135,11 +135,10 @@ void ServerImpl::Join() {
         w.Join();
     }
     std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-    for (auto pc : set_of_connections) {
-        close(pc->_socket);
-        //delete pc;
+    for (auto client : set_of_clients) {
+        close(client);
     }
-    set_of_connections.clear();
+    set_of_clients.clear();
     close(_server_socket);
 }
 
@@ -204,7 +203,8 @@ void ServerImpl::OnRun() {
                 }
 
                 // Register the new FD to be monitored by epoll.
-                Connection *pc = new Connection(infd, _logger, pStorage);
+                //Connection *pc = new Connection(infd, _logger, pStorage);
+                std::unique_ptr<Connection> pc = std::unique_ptr<Connection>(new Connection(infd, _logger, pStorage));
                 if (pc == nullptr) {
                     throw std::runtime_error("Failed to allocate connection");
                 }
@@ -218,12 +218,11 @@ void ServerImpl::OnRun() {
                         _logger->debug("epoll_ctl failed during connection register in workers'epoll: error {}", epoll_ctl_retval);
                         pc->OnError();
                         std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-                        set_of_connections.erase(pc);
+                        set_of_clients.erase(pc->_socket);
                         close(pc->_socket);
-                        delete pc;
                     }else{
                         std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-                        set_of_connections.insert(pc);
+                        set_of_clients.insert(pc->_socket);
                     }
                 }
             }

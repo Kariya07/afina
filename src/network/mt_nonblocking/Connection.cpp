@@ -33,7 +33,7 @@ void Connection::DoRead() {
         int read_bytes = -1;
         while ((read_bytes = read(_socket, client_buffer + readed_bytes, sizeof(client_buffer) - readed_bytes)) > 0) {
             _logger->debug("Got {} bytes from socket", read_bytes);
-
+            finish_reading.store(false);
             // Single block of data readed from the socket could trigger inside actions a multiple times,
             // for example:
             // - read#0: [<command1 start>]
@@ -142,7 +142,7 @@ void Connection::DoWrite() {
             }
         }
         out.erase(out.begin(), out.begin() + i);
-        if (out.empty()) {
+        if (out.empty() && finish_reading.load()) {
             _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLET;
             is_alive.store(false);
         }
