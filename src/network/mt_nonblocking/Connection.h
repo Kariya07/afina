@@ -15,7 +15,7 @@ namespace MTnonblock {
 class Connection {
 public:
     Connection(int s, std::shared_ptr<spdlog::logger> pl, std::shared_ptr<Afina::Storage> ps)
-        : _socket(s), _logger(pl), pStorage(ps){
+        : _socket(s), _logger(pl), pStorage(ps) {
         std::memset(&_event, 0, sizeof(struct epoll_event));
         _event.data.ptr = this;
         is_alive.store(true);

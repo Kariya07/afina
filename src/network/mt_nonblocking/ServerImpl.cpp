@@ -120,8 +120,9 @@ void ServerImpl::Stop() {
         throw std::runtime_error("Failed to wakeup workers");
     }
     shutdown(_server_socket, SHUT_RDWR);
-    for (auto client : set_of_clients) {
-        shutdown(client, SHUT_RD);
+    for (const auto &pc : set_of_connections) {
+        // Connection* ptr = pc.get();
+        shutdown(pc->_socket, SHUT_RD);
     }
 }
 
@@ -135,10 +136,11 @@ void ServerImpl::Join() {
         w.Join();
     }
     std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-    for (auto client : set_of_clients) {
-        close(client);
+    for (const auto &pc : set_of_connections) {
+        // Connection* ptr = pc.get();
+        close(pc->_socket);
     }
-    set_of_clients.clear();
+    set_of_connections.clear();
     close(_server_socket);
 }
 
@@ -203,7 +205,7 @@ void ServerImpl::OnRun() {
                 }
 
                 // Register the new FD to be monitored by epoll.
-                //Connection *pc = new Connection(infd, _logger, pStorage);
+                // Connection *pc = new Connection(infd, _logger, pStorage);
                 std::unique_ptr<Connection> pc = std::unique_ptr<Connection>(new Connection(infd, _logger, pStorage));
                 if (pc == nullptr) {
                     throw std::runtime_error("Failed to allocate connection");
@@ -215,14 +217,15 @@ void ServerImpl::OnRun() {
                     pc->_event.events |= EPOLLONESHOT;
                     int epoll_ctl_retval;
                     if ((epoll_ctl_retval = epoll_ctl(_data_epoll_fd, EPOLL_CTL_ADD, pc->_socket, &pc->_event))) {
-                        _logger->debug("epoll_ctl failed during connection register in workers'epoll: error {}", epoll_ctl_retval);
+                        _logger->debug("epoll_ctl failed during connection register in workers'epoll: error {}",
+                                       epoll_ctl_retval);
                         pc->OnError();
                         std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-                        set_of_clients.erase(pc->_socket);
+                        set_of_connections.erase(pc.get());
                         close(pc->_socket);
-                    }else{
+                    } else {
                         std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-                        set_of_clients.insert(pc->_socket);
+                        set_of_connections.insert(pc.release());
                     }
                 }
             }
