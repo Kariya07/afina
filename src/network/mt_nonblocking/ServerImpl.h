@@ -1,8 +1,8 @@
 #ifndef AFINA_NETWORK_MT_NONBLOCKING_SERVER_H
 #define AFINA_NETWORK_MT_NONBLOCKING_SERVER_H
 
+#include <map>
 #include <mutex>
-#include <set>
 #include <thread>
 #include <vector>
 
@@ -66,8 +66,8 @@ private:
 
     // threads serving read/write requests
     std::vector<Worker> _workers;
-    std::set<Connection *> set_of_connections;
-    std::mutex set_of_connections_lock;
+    std::map<const int, std::unique_ptr<Connection>, std::less<int>> connections_map;
+    std::mutex connections_map_lock;
 };
 
 } // namespace MTnonblock

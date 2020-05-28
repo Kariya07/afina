@@ -92,6 +92,7 @@ void Worker::OnRun() {
 
             // Some connection gets new data
             Connection *pconn = static_cast<Connection *>(current_event.data.ptr);
+            //std::unique_ptr<Connection> pconn = std::unique_ptr<Connection>(static_cast<Connection *>(current_event.data.ptr));
             if ((current_event.events & EPOLLERR) || (current_event.events & EPOLLHUP)) {
                 _logger->debug("Got EPOLLERR or EPOLLHUP, value of returned events: {}", current_event.events);
                 pconn->OnError();
@@ -118,7 +119,6 @@ void Worker::OnRun() {
                     _logger->debug("epoll_ctl failed during connection rearm: error {}", epoll_ctl_retval);
                     pconn->OnError();
                     close(pconn->_socket);
-                    delete pconn;
                 }
             }
             // Or delete closed one
@@ -127,7 +127,6 @@ void Worker::OnRun() {
                     std::cerr << "Failed to delete connection!" << std::endl;
                 }
                 close(pconn->_socket);
-                delete pconn;
             }
         }
         // TODO: Select timeout...

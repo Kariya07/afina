@@ -120,9 +120,8 @@ void ServerImpl::Stop() {
         throw std::runtime_error("Failed to wakeup workers");
     }
     shutdown(_server_socket, SHUT_RDWR);
-    for (const auto &pc : set_of_connections) {
-        // Connection* ptr = pc.get();
-        shutdown(pc->_socket, SHUT_RD);
+    for (auto &pc : connections_map) {
+        shutdown(pc.first, SHUT_RD);
     }
 }
 
@@ -135,12 +134,11 @@ void ServerImpl::Join() {
     for (auto &w : _workers) {
         w.Join();
     }
-    std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-    for (const auto &pc : set_of_connections) {
-        // Connection* ptr = pc.get();
-        close(pc->_socket);
+    std::unique_lock<std::mutex> _lock(connections_map_lock);
+    for (auto &pc : connections_map) {
+        close(pc.first);
     }
-    set_of_connections.clear();
+    connections_map.clear();
     close(_server_socket);
 }
 
@@ -220,12 +218,12 @@ void ServerImpl::OnRun() {
                         _logger->debug("epoll_ctl failed during connection register in workers'epoll: error {}",
                                        epoll_ctl_retval);
                         pc->OnError();
-                        std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-                        set_of_connections.erase(pc.get());
+                        std::unique_lock<std::mutex> _lock(connections_map_lock);
                         close(pc->_socket);
+                        connections_map.erase(pc->_socket);
                     } else {
-                        std::unique_lock<std::mutex> _lock(set_of_connections_lock);
-                        set_of_connections.insert(pc.release());
+                        std::unique_lock<std::mutex> _lock(connections_map_lock);
+                        connections_map[pc->_socket] = std::move(pc);
                     }
                 }
             }
