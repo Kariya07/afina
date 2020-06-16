@@ -18,8 +18,7 @@ namespace Afina {
 namespace Network {
 namespace STcoroutine {
 
-// Forward declaration, see Worker.h
-class Worker;
+
 
 /**
  * # Network resource manager implementation
@@ -41,7 +40,6 @@ public:
 
 protected:
     void OnRun();
-    void OnNewConnection(int);
 
 private:
     // logger to use
@@ -60,7 +58,7 @@ private:
 
     // IO thread
     std::thread _work_thread;
-    std::set<int> clients;
+    std::set<Connection*> clients;
 
     Afina::Coroutine::Engine::context *_ctx;
     Afina::Coroutine::Engine engine;

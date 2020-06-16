@@ -29,16 +29,16 @@ namespace Network {
 namespace STcoroutine {
 
 // See Server.h
-ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl)
-    : Server(ps, pl), _ctx(nullptr), engine([this] { this->unblocker(); }) {}
 
+ServerImpl::ServerImpl(std::shared_ptr<Afina::Storage> ps, std::shared_ptr<Logging::Service> pl)
+    : Server(ps, pl), engine([this] { this->unblocker(); }), _ctx(nullptr) {}
 // See Server.h
 ServerImpl::~ServerImpl() {}
 
 // See Server.h
 void ServerImpl::Start(uint16_t port, uint32_t n_acceptors, uint32_t n_workers) {
     _logger = pLogging->select("network");
-    _logger->info("Start st_nonblocking network service");
+    _logger->info("Start st_coroutine network service");
 
     sigset_t sig_mask;
     sigemptyset(&sig_mask);
@@ -60,7 +60,7 @@ void ServerImpl::Start(uint16_t port, uint32_t n_acceptors, uint32_t n_workers) 
     }
 
     int opts = 1;
-    if (setsockopt(_server_socket, SOL_SOCKET, (SO_KEEPALIVE), &opts, sizeof(opts)) == -1) {
+    if (setsockopt(_server_socket, SOL_SOCKET, (SO_REUSEADDR), &opts, sizeof(opts)) == -1) {
         close(_server_socket);
         throw std::runtime_error("Socket setsockopt() failed: " + std::string(strerror(errno)));
     }
@@ -95,16 +95,21 @@ void ServerImpl::Stop() {
         throw std::runtime_error("Failed to wakeup workers");
     }
     for (auto client : clients) {
-        close(client);
+        shutdown(client->_socket, SHUT_RD);
     }
-    close(_server_socket);
-    clients.clear();
+    shutdown(_server_socket, SHUT_RDWR);
 }
 
 // See Server.h
 void ServerImpl::Join() {
     // Wait for work to be complete
     _work_thread.join();
+    for (auto client : clients) {
+        close(client->_socket);
+        delete client;
+    }
+    close(_server_socket);
+    clients.clear();
 }
 
 // See ServerImpl.h
@@ -136,6 +141,13 @@ void ServerImpl::OnRun() {
     std::array<struct epoll_event, 64> mod_list;
     while (run) {
         int nmod = epoll_wait(epoll_descr, &mod_list[0], mod_list.size(), -1);
+        /*if (nmod == 0){
+            _logger->debug("Wait time is out");
+            engine.all_unblock();
+            engine.block(_ctx);
+            run = false;
+            continue;
+        }*/
         _logger->debug("Acceptor wokeup: {} events", nmod);
 
         for (int i = 0; i < nmod; i++) {
@@ -147,10 +159,51 @@ void ServerImpl::OnRun() {
                 run = false;
                 continue;
             } else if (current_event.data.fd == _server_socket) {
-                OnNewConnection(epoll_descr);
+                for (;;) {
+                    struct sockaddr in_addr;
+                    socklen_t in_len;
+
+                    // No need to make these sockets non blocking since accept4() takes care of it.
+                    in_len = sizeof in_addr;
+                    int infd = accept4(_server_socket, &in_addr, &in_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                    if (infd == -1) {
+                        if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
+                            break; // We have processed all incoming connections.
+                        } else {
+                            _logger->error("Failed to accept socket");
+                            break;
+                        }
+                    }
+
+                    // Print host and service info.
+                    char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
+                    int retval =
+                        getnameinfo(&in_addr, in_len, hbuf, sizeof hbuf, sbuf, sizeof sbuf, NI_NUMERICHOST | NI_NUMERICSERV);
+                    if (retval == 0) {
+                        _logger->info("Accepted connection on descriptor {} (host={}, port={})\n", infd, hbuf, sbuf);
+                    }
+
+                    // Register the new FD to be monitored by epoll.
+                    Connection *pc = new (std::nothrow) Connection(infd, pStorage, _logger, &engine);
+                    if (pc == nullptr) {
+                        throw std::runtime_error("Failed to allocate connection");
+                    }
+
+                    // Register connection in worker's epoll
+                    pc->Start();
+                    pc->_ctx = static_cast<Afina::Coroutine::Engine::context *>(engine.run(
+                        static_cast<void (*)(Connection *)>([](Connection *pc) { pc->Process(); }), (Connection *)pc));
+                    if (pc->isAlive()) {
+                        if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, pc->_socket, &pc->_event)) {
+                            pc->OnError();
+                            delete pc;
+                        } else {
+                            clients.emplace(pc);
+                        }
+                    }
+                }
                 continue;
             }
-
 
             Connection *pc = static_cast<Connection *>(current_event.data.ptr);
             auto old_mask = pc->_event.events;
@@ -171,7 +224,7 @@ void ServerImpl::OnRun() {
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_DEL, pc->_socket, &pc->_event)) {
                     _logger->error("Failed to delete connection from epoll");
                 }
-                clients.erase(pc->_socket);
+                clients.erase(pc);
                 close(pc->_socket);
                 pc->OnClose();
 
@@ -179,7 +232,7 @@ void ServerImpl::OnRun() {
             } else if (pc->_event.events != old_mask) {
                 if (epoll_ctl(epoll_descr, EPOLL_CTL_MOD, pc->_socket, &pc->_event)) {
                     _logger->error("Failed to change connection event mask");
-                    clients.erase(pc->_socket);
+                    clients.erase(pc);
                     close(pc->_socket);
                     pc->OnClose();
 
@@ -192,53 +245,6 @@ void ServerImpl::OnRun() {
     _logger->warn("Acceptor stopped");
 }
 
-void ServerImpl::OnNewConnection(int epoll_descr) {
-    for (;;) {
-        struct sockaddr in_addr;
-        socklen_t in_len;
-
-        // No need to make these sockets non blocking since accept4() takes care of it.
-        in_len = sizeof in_addr;
-        int infd = accept4(_server_socket, &in_addr, &in_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
-        if (infd == -1) {
-            if ((errno == EAGAIN) || (errno == EWOULDBLOCK)) {
-                break; // We have processed all incoming connections.
-            } else {
-                _logger->error("Failed to accept socket");
-                break;
-            }
-        }
-
-        // Print host and service info.
-        char hbuf[NI_MAXHOST], sbuf[NI_MAXSERV];
-        int retval =
-            getnameinfo(&in_addr, in_len, hbuf, sizeof hbuf, sbuf, sizeof sbuf, NI_NUMERICHOST | NI_NUMERICSERV);
-        if (retval == 0) {
-            _logger->info("Accepted connection on descriptor {} (host={}, port={})\n", infd, hbuf, sbuf);
-        }
-
-        // Register the new FD to be monitored by epoll.
-        Connection *pc = new (std::nothrow) Connection(infd, pStorage, _logger);
-        if (pc == nullptr) {
-            throw std::runtime_error("Failed to allocate connection");
-        }
-
-        // Register connection in worker's epoll
-        pc->Start();
-        pc->_ctx = static_cast<Afina::Coroutine::Engine::context *>(
-            engine.run(static_cast<void (*)(Connection *, Afina::Coroutine::Engine &)>(
-                           [](Connection *pc, Afina::Coroutine::Engine &engine) { pc->OnConnection(engine); }),
-                       (Connection *)pc, engine));
-        if (pc->isAlive()) {
-            if (epoll_ctl(epoll_descr, EPOLL_CTL_ADD, pc->_socket, &pc->_event)) {
-                pc->OnError();
-                delete pc;
-            } else {
-                clients.insert(pc->_socket);
-            }
-        }
-    }
-}
 
 void ServerImpl::unblocker() {
     engine.unblock(_ctx);

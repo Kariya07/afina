@@ -4,8 +4,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <iostream>
-
 namespace Afina {
 namespace Network {
 namespace STcoroutine {
@@ -13,9 +11,9 @@ namespace STcoroutine {
 // See Connection.h
 void Connection::Start() {
     _logger->debug("Connection on {} socket started", _socket);
-    _event.data.ptr = this;
     _event.data.fd = _socket;
-    _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR;
+    _event.data.ptr = this;
+    _event.events = EPOLLIN | EPOLLHUP | EPOLLERR;
     is_alive = true;
 }
 
@@ -32,7 +30,7 @@ void Connection::OnClose() {
 }
 
 // See Connection.h
-void Connection::OnConnection(Afina::Coroutine::Engine &engine) {
+void Connection::Process() {
     _logger->debug("Do read on {} socket", _socket);
     char _read_buffer[4096];
     size_t _read_bytes = 0;
@@ -63,7 +61,15 @@ void Connection::OnConnection(Afina::Coroutine::Engine &engine) {
                             }
                         }
                     } catch (std::runtime_error &ex) {
-                        _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLOUT;
+                        std::string result = "(?^u:ERROR)";
+                        result += "\r\n";
+                        _event.events |= EPOLLOUT;
+
+                        _engine->block();
+
+                        if (send(_socket, result.data(), result.size(), 0) <= 0) {
+                            throw std::runtime_error("Failed to send response");
+                        }
                         throw std::runtime_error(ex.what());
                     }
 
@@ -96,9 +102,9 @@ void Connection::OnConnection(Afina::Coroutine::Engine &engine) {
                     _command_to_execute->Execute(*_pStorage, _argument_for_command, result);
                     // Send response
                     result += "\r\n";
-                    _event.events = EPOLLIN | EPOLLRDHUP | EPOLLERR | EPOLLOUT;
+                    _event.events |= EPOLLOUT;
 
-                    engine.block();
+                    _engine->block();
 
                     if (send(_socket, result.data(), result.size(), 0) <= 0) {
                         throw std::runtime_error("Failed to send response");
@@ -108,7 +114,7 @@ void Connection::OnConnection(Afina::Coroutine::Engine &engine) {
                     _argument_for_command.resize(0);
                     _parser.Reset();
 
-                    engine.block();
+                    _engine->block();
                 }
             }
         } // while (readed)
